@@ -372,6 +372,13 @@
       font-weight: 800;
     }
 
+    .sync-status {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
     .empty {
       border: 1px dashed var(--line);
       border-radius: 12px;
@@ -512,7 +519,7 @@
               <p id="endText"></p>
               <div class="buttons">
                 <button class="primary" id="playAgainButton">Luaj perseri</button>
-                <button class="secondary" id="resetBoardButton">Fshi renditjen</button>
+                <button class="secondary" id="resetBoardButton">Ndrysho lojtarin</button>
               </div>
             </div>
           </div>
@@ -528,8 +535,9 @@
           <li>Combo rritet kur klikon sakte rresht</li>
         </ul>
 
-        <h3>Renditja lokale</h3>
+        <h3>Renditja</h3>
         <div class="leaderboard" id="leaderboard"></div>
+        <div class="sync-status" id="syncStatus"></div>
       </aside>
     </section>
   </main>
@@ -547,7 +555,13 @@
     const endText = document.getElementById("endText");
     const savedPlayerInfo = document.getElementById("savedPlayerInfo");
     const startButton = document.getElementById("startButton");
+    const syncStatus = document.getElementById("syncStatus");
 
+    const supabaseConfig = {
+      url: "https://rhzhpdzgmdbkgdbldkvt.supabase.co",
+      anonKey: "sb_publishable_ktf-LYwxzimAg1lF2njp_Q_gq4Vfc5Q",
+      table: "office_click_players"
+    };
     const gameSeconds = 30;
     const boardKey = "office-click-challenge-board";
     const playersKey = "office-click-challenge-players-v2";
@@ -577,7 +591,65 @@
       return name.trim().replace(/\s+/g, " ").toLowerCase();
     }
 
-    function loadPlayers() {
+    function isRemoteEnabled() {
+      return supabaseConfig.url.startsWith("https://")
+        && supabaseConfig.anonKey.length > 40
+        && !supabaseConfig.url.includes("PASTE_")
+        && !supabaseConfig.anonKey.includes("PASTE_");
+    }
+
+    function setSyncStatus(message) {
+      syncStatus.textContent = message;
+    }
+
+    function mapRemotePlayer(row) {
+      return {
+        id: row.id,
+        name: row.name,
+        totalScore: row.total_score || 0,
+        bestScore: row.best_score || 0,
+        games: row.games || 0,
+        lastScore: row.last_score || 0,
+        date: row.updated_at || ""
+      };
+    }
+
+    function mapLocalPlayer(player) {
+      return {
+        id: player.id,
+        name: player.name,
+        total_score: player.totalScore || 0,
+        best_score: player.bestScore || 0,
+        games: player.games || 0,
+        last_score: player.lastScore || 0,
+        updated_at: new Date().toISOString()
+      };
+    }
+
+    async function supabaseRequest(path, options = {}) {
+      const response = await fetch(`${supabaseConfig.url}/rest/v1/${path}`, {
+        ...options,
+        headers: {
+          apikey: supabaseConfig.anonKey,
+          Authorization: `Bearer ${supabaseConfig.anonKey}`,
+          "Content-Type": "application/json",
+          ...(options.headers || {})
+        }
+      });
+
+      if (!response.ok) {
+        const details = await response.text();
+        throw new Error(details || "Supabase request failed");
+      }
+
+      if (response.status === 204) {
+        return null;
+      }
+
+      return response.json();
+    }
+
+    function loadLocalPlayers() {
       try {
         const savedPlayers = JSON.parse(localStorage.getItem(playersKey));
         if (savedPlayers) {
@@ -616,8 +688,59 @@
       return players;
     }
 
-    function savePlayers(players) {
+    function saveLocalPlayers(players) {
       localStorage.setItem(playersKey, JSON.stringify(players));
+    }
+
+    async function loadPlayers() {
+      if (!isRemoteEnabled()) {
+        setSyncStatus("Ruajtja online nuk eshte konfiguruar ende. Po perdoret ruajtje lokale.");
+        return loadLocalPlayers();
+      }
+
+      try {
+        const rows = await supabaseRequest(
+          `${supabaseConfig.table}?select=id,name,total_score,best_score,games,last_score,updated_at&order=total_score.desc`
+        );
+        const players = {};
+        rows.forEach((row) => {
+          players[row.id] = mapRemotePlayer(row);
+        });
+        setSyncStatus("Renditja po ruhet online ne Supabase.");
+        return players;
+      } catch (error) {
+        console.error(error);
+        setSyncStatus("Nuk u lidh dot me Supabase. Perkohesisht po perdoret ruajtje lokale.");
+        return loadLocalPlayers();
+      }
+    }
+
+    async function savePlayer(player) {
+      if (!isRemoteEnabled()) {
+        const players = loadLocalPlayers();
+        players[player.id] = player;
+        saveLocalPlayers(players);
+        return player;
+      }
+
+      try {
+        const rows = await supabaseRequest(`${supabaseConfig.table}?on_conflict=id`, {
+          method: "POST",
+          headers: {
+            Prefer: "resolution=merge-duplicates,return=representation"
+          },
+          body: JSON.stringify(mapLocalPlayer(player))
+        });
+        setSyncStatus("Rezultati u ruajt online.");
+        return rows && rows[0] ? mapRemotePlayer(rows[0]) : player;
+      } catch (error) {
+        console.error(error);
+        const players = loadLocalPlayers();
+        players[player.id] = player;
+        saveLocalPlayers(players);
+        setSyncStatus("Ruajtja online deshtoi. Rezultati u ruajt vetem lokalisht.");
+        return player;
+      }
     }
 
     function loadCurrentPlayer() {
@@ -645,8 +768,8 @@
       startButton.textContent = "Vazhdo si " + currentPlayer.name;
     }
 
-    function renderBoard() {
-      const board = Object.values(loadPlayers())
+    async function renderBoard() {
+      const board = Object.values(await loadPlayers())
         .sort((a, b) => b.totalScore - a.totalScore || b.bestScore - a.bestScore)
         .slice(0, 8);
       leaderboard.innerHTML = "";
@@ -686,10 +809,10 @@
       }, 0);
     }
 
-    function startGame() {
+    async function startGame() {
       playerName = playerNameInput.value.trim().replace(/\s+/g, " ") || "Lojtar";
       playerId = normalizeName(playerName);
-      const players = loadPlayers();
+      const players = await loadPlayers();
       recordToBeat = getHighestBestScore(players);
       recordSurpriseShown = recordToBeat <= 0;
 
@@ -724,13 +847,13 @@
       }, 1000);
     }
 
-    function endGame() {
+    async function endGame() {
       running = false;
       clearInterval(gameTimer);
       clearTimeout(targetTimer);
       removeTarget();
 
-      const players = loadPlayers();
+      const players = await loadPlayers();
       const existing = players[playerId] || {
         id: playerId,
         name: playerName,
@@ -747,11 +870,10 @@
       existing.games += 1;
       existing.lastScore = score;
       existing.date = new Date().toISOString();
-      players[playerId] = existing;
-      savePlayers(players);
-      renderBoard();
+      const savedPlayer = await savePlayer(existing);
+      await renderBoard();
 
-      endText.textContent = `${playerName}, kjo loje: ${score} pike. Total: ${existing.totalScore}. Rekordi yt: ${existing.bestScore}.`;
+      endText.textContent = `${playerName}, kjo loje: ${score} pike. Total: ${savedPlayer.totalScore}. Rekordi yt: ${savedPlayer.bestScore}.`;
       endScreen.classList.remove("hidden");
     }
 
