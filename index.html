@@ -181,6 +181,12 @@
       box-shadow: 0 0 0 4px rgba(10, 109, 179, 0.13);
     }
 
+    input:disabled {
+      color: var(--ink);
+      background: #eef4fb;
+      cursor: not-allowed;
+    }
+
     .buttons {
       display: flex;
       gap: 10px;
@@ -519,7 +525,6 @@
               <p id="endText"></p>
               <div class="buttons">
                 <button class="primary" id="playAgainButton">Luaj perseri</button>
-                <button class="secondary" id="resetBoardButton">Ndrysho lojtarin</button>
               </div>
             </div>
           </div>
@@ -593,7 +598,7 @@
 
     function isRemoteEnabled() {
       return supabaseConfig.url.startsWith("https://")
-        && supabaseConfig.anonKey.length > 40
+        && supabaseConfig.anonKey.length > 20
         && !supabaseConfig.url.includes("PASTE_")
         && !supabaseConfig.anonKey.includes("PASTE_");
     }
@@ -627,19 +632,21 @@
     }
 
     async function supabaseRequest(path, options = {}) {
+      const headers = {
+        apikey: supabaseConfig.anonKey,
+        Authorization: `Bearer ${supabaseConfig.anonKey}`,
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      };
+
       const response = await fetch(`${supabaseConfig.url}/rest/v1/${path}`, {
         ...options,
-        headers: {
-          apikey: supabaseConfig.anonKey,
-          Authorization: `Bearer ${supabaseConfig.anonKey}`,
-          "Content-Type": "application/json",
-          ...(options.headers || {})
-        }
+        headers
       });
 
       if (!response.ok) {
         const details = await response.text();
-        throw new Error(details || "Supabase request failed");
+        throw new Error(`HTTP ${response.status}: ${details || "Supabase request failed"}`);
       }
 
       if (response.status === 204) {
@@ -710,8 +717,8 @@
         return players;
       } catch (error) {
         console.error(error);
-        setSyncStatus("Nuk u lidh dot me Supabase. Perkohesisht po perdoret ruajtje lokale.");
-        return loadLocalPlayers();
+        setSyncStatus("Nuk u lidh dot me Supabase: " + error.message.slice(0, 160));
+        return {};
       }
     }
 
@@ -738,7 +745,7 @@
         const players = loadLocalPlayers();
         players[player.id] = player;
         saveLocalPlayers(players);
-        setSyncStatus("Ruajtja online deshtoi. Rezultati u ruajt vetem lokalisht.");
+        setSyncStatus("Ruajtja online deshtoi: " + error.message.slice(0, 160));
         return player;
       }
     }
@@ -760,10 +767,12 @@
       if (!currentPlayer || !currentPlayer.name) {
         savedPlayerInfo.textContent = "";
         startButton.textContent = "Fillo lojen";
+        playerNameInput.disabled = false;
         return;
       }
 
       playerNameInput.value = currentPlayer.name;
+      playerNameInput.disabled = true;
       savedPlayerInfo.textContent = "Lojtari u njoh automatikisht. Mund te vazhdosh direkt.";
       startButton.textContent = "Vazhdo si " + currentPlayer.name;
     }
@@ -990,14 +999,6 @@
       endScreen.classList.add("hidden");
       startScreen.classList.remove("hidden");
       playerNameInput.focus();
-    });
-    document.getElementById("resetBoardButton").addEventListener("click", () => {
-      localStorage.removeItem(boardKey);
-      localStorage.removeItem(playersKey);
-      localStorage.removeItem(currentPlayerKey);
-      playerNameInput.value = "";
-      applySavedPlayer();
-      renderBoard();
     });
     playerNameInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
