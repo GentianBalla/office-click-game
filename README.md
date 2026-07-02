@@ -1,7 +1,7 @@
 # Office Click Challenge
 
 Loje e thjeshte me klikime per koleget e zyres. Projekti eshte statik dhe mund te publikohet direkt me GitHub Pages.
-
+ 
 ## Publikimi ne GitHub Pages
 
 1. Krijo nje repository te ri ne GitHub, p.sh. `office-click-game`.
